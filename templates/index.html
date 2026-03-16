@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_title }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Facebook Scraper</p>
+        <h1>{{ app_title }}</h1>
+        <p class="subtitle">Run from browser, sign in once, and export a clean CSV.</p>
+        <div class="login-notice">
+          <strong>Important:</strong> when Facebook opens, log in manually in that Chrome window.
+        </div>
+      </div>
+
+      <form id="scrape-form" class="control-card">
+        <label class="field">
+          <span>Search in Facebook</span>
+          <input id="search_word" name="search_word" type="text" placeholder="e.g. רכב יד 2" required>
+        </label>
+
+        <label class="field">
+          <span>Group links number</span>
+          <input id="group_links_number" name="group_links_number" type="number" min="1" value="3" required>
+        </label>
+
+        <label class="field">
+          <span>Posts from each group</span>
+          <input id="posts_from_each_group" name="posts_from_each_group" type="number" min="1" value="4" required>
+        </label>
+
+        <div class="actions">
+          <button id="run-btn" type="submit" class="primary">Run</button>
+          <button id="stop-btn" type="button" class="danger" disabled>Stop</button>
+          <a id="download-btn" class="secondary disabled" href="#" aria-disabled="true">Download CSV</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="status-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Status</h2>
+          <span id="job-state" class="badge idle">Idle</span>
+        </div>
+        <p id="job-message" class="status-message">No active job.</p>
+        <div class="progress-wrap">
+          <div class="progress-head">
+            <span id="progress-text">Ready</span>
+            <span id="progress-percent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel terminal-panel">
+        <div class="panel-head">
+          <h2>Process Log</h2>
+          <button id="clear-logs-btn" type="button" class="clear-btn">Clear</button>
+        </div>
+        <pre id="log-output" class="terminal">Waiting for a run...</pre>
+      </article>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

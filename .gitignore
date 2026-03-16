@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.vscode/
+
+# Chrome profile
+.chrome-profile/
+web_profiles/
+
+# Environment variables
+.env
+
+# Output files
+*.csv
+web_outputs/
+
+# OS
+.DS_Store
+Thumbs.db
+.env
