@@ -81,9 +81,9 @@ if (copyEmailBtn) {
       document.body.removeChild(helper);
     }
     const original = copyEmailBtn.textContent;
-    copyEmailBtn.textContent = copied ? "Copied!" : "Copy Failed";
+    copyEmailBtn.textContent = copied ? "COPIED" : "COPY FAILED";
     setTimeout(() => {
-      copyEmailBtn.textContent = original || "Copy Email";
+      copyEmailBtn.textContent = original || "shahaf564@gmail.com";
     }, 1400);
   });
 }
