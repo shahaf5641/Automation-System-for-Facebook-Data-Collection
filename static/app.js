@@ -12,6 +12,7 @@ const progressFill = document.getElementById("progress-fill");
 const themeToggle = document.getElementById("theme-toggle");
 const themeLabel = document.getElementById("theme-label");
 const themeIcon = document.getElementById("theme-icon");
+const copyEmailBtn = document.getElementById("copy-email-btn");
 
 const CLIENT_ID_KEY = "fb_scraper_client_id";
 const THEME_KEY = "fb_scraper_theme";
@@ -58,6 +59,32 @@ if (themeToggle) {
     const next = current === "dark" ? "light" : "dark";
     localStorage.setItem(THEME_KEY, next);
     applyTheme(next);
+  });
+}
+
+if (copyEmailBtn) {
+  copyEmailBtn.addEventListener("click", async () => {
+    const email = copyEmailBtn.dataset.email || "shahaf564@gmail.com";
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(email);
+      copied = true;
+    } catch (_) {
+      const helper = document.createElement("textarea");
+      helper.value = email;
+      helper.setAttribute("readonly", "");
+      helper.style.position = "absolute";
+      helper.style.left = "-9999px";
+      document.body.appendChild(helper);
+      helper.select();
+      copied = document.execCommand("copy");
+      document.body.removeChild(helper);
+    }
+    const original = copyEmailBtn.textContent;
+    copyEmailBtn.textContent = copied ? "Copied!" : "Copy Failed";
+    setTimeout(() => {
+      copyEmailBtn.textContent = original || "Copy Email";
+    }, 1400);
   });
 }
 

@@ -18,7 +18,7 @@
     <section class="hero-card">
       <div class="hero-copy">
         <h1>{{ app_title }}</h1>
-        <p class="subtitle">One click to collect Facebook posts into a clean, ready-to-filter CSV.</p>
+        <p class="subtitle">Enter a Facebook search phrase, choose groups and posts count, then get a downloadable CSV with post data.</p>
         <div class="hero-points">
           <span>Live progress</span>
           <span>Queue-safe runs</span>
@@ -34,12 +34,12 @@
 
         <label class="field">
           <span>Group links number</span>
-          <input id="group_links_number" name="group_links_number" type="number" min="1" value="3" required>
+          <input id="group_links_number" name="group_links_number" type="number" min="1" placeholder="e.g. 3" required>
         </label>
 
         <label class="field">
           <span>Posts from each group</span>
-          <input id="posts_from_each_group" name="posts_from_each_group" type="number" min="1" value="4" required>
+          <input id="posts_from_each_group" name="posts_from_each_group" type="number" min="1" placeholder="e.g. 4" required>
         </label>
 
         <div class="actions">
@@ -83,7 +83,7 @@
       <p class="footer-subtitle">Software Developer</p>
     </div>
     <div class="footer-links">
-      <a href="mailto:shahaf564@gmail.com">shahaf564@gmail.com</a>
+      <button id="copy-email-btn" type="button" data-email="shahaf564@gmail.com">Copy Email</button>
       <a href="https://github.com/shahaf5641" target="_blank" rel="noopener noreferrer">GitHub</a>
       <a href="https://www.linkedin.com/in/shahaf-israel-0a6502173/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
     </div>
