@@ -42,6 +42,7 @@ class JobLogHandler(logging.Handler):
 class ScrapeJob:
     job_id: str
     settings: Settings
+    owner_client_id: str
     control: DriverControl = field(default_factory=DriverControl)
     status: str = "queued"
     message: str = "Waiting to start"
@@ -54,6 +55,7 @@ class ScrapeJob:
     current_group: int = 0
     total_groups: int = 0
     searching_groups_announced: bool = False
+    queue_position: int = 0
     thread: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -167,18 +169,55 @@ class ScrapeJob:
                 "progress_text": self.progress_text,
                 "captured_posts": self.captured_posts,
                 "target_posts": self.target_posts,
+                "owner_client_id": self.owner_client_id,
+                "queue_position": self.queue_position,
             }
 
 
 jobs: dict[str, ScrapeJob] = {}
 jobs_lock = threading.Lock()
 active_job_id: str | None = None
+waiting_job_ids: deque[str] = deque()
 
 
 def _set_active_job(job_id: str | None) -> None:
     global active_job_id
     with jobs_lock:
         active_job_id = job_id
+
+
+def _refresh_queue_positions_locked() -> None:
+    for position, queued_job_id in enumerate(waiting_job_ids, start=1):
+        queued_job = jobs.get(queued_job_id)
+        if queued_job is not None and queued_job.status == "queued":
+            queued_job.queue_position = position
+
+
+def _start_job_thread(job: ScrapeJob) -> None:
+    thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
+    job.thread = thread
+    thread.start()
+
+
+def _promote_next_queued_job() -> None:
+    global active_job_id
+    next_job: ScrapeJob | None = None
+    with jobs_lock:
+        if active_job_id is not None:
+            return
+        while waiting_job_ids:
+            next_job_id = waiting_job_ids.popleft()
+            candidate = jobs.get(next_job_id)
+            if candidate is None or candidate.status != "queued":
+                continue
+            active_job_id = next_job_id
+            candidate.queue_position = 0
+            candidate.message = "Running"
+            next_job = candidate
+            break
+        _refresh_queue_positions_locked()
+    if next_job is not None:
+        _start_job_thread(next_job)
 
 
 def _get_active_job() -> ScrapeJob | None:
@@ -254,7 +293,11 @@ def _run_job(job: ScrapeJob) -> None:
                 job.message = "Finished with errors."
                 if job.progress_percent < 100:
                     job.progress_text = "Failed"
-        _set_active_job(None)
+        global active_job_id
+        with jobs_lock:
+            if active_job_id == job.job_id:
+                active_job_id = None
+        _promote_next_queued_job()
 
 
 @app.get("/")
@@ -267,33 +310,47 @@ def get_active_job():
     job = _get_active_job()
     if job is None:
         return jsonify({"job": None})
+    client_id = str(request.args.get("client_id", "")).strip()
+    if client_id and client_id != job.owner_client_id:
+        return jsonify({"job": None})
     return jsonify({"job": job.snapshot()})
 
 
 @app.post("/api/jobs")
 def create_job():
-    current_job = _get_active_job()
-    if current_job is not None and current_job.status in {"queued", "running"}:
-        return jsonify({"error": "A scrape is already running."}), 409
-
     payload = request.get_json(silent=True) or request.form.to_dict()
+    client_id = str(payload.get("client_id", "")).strip() or uuid.uuid4().hex
 
     try:
         settings = _create_settings_from_request(payload)
     except SettingsError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    job = ScrapeJob(job_id=Path(settings.output_file).stem.replace("facebookposts-", ""), settings=settings)
+    job = ScrapeJob(
+        job_id=Path(settings.output_file).stem.replace("facebookposts-", ""),
+        settings=settings,
+        owner_client_id=client_id,
+    )
     job.target_posts = settings.expected_table_size
     job.total_groups = settings.group_links_number
     job.append_log("Ready to start.")
-    thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
-    job.thread = thread
-
+    start_now = False
     with jobs_lock:
         jobs[job.job_id] = job
-    _set_active_job(job.job_id)
-    thread.start()
+        global active_job_id
+        if active_job_id is None:
+            active_job_id = job.job_id
+            start_now = True
+        else:
+            job.message = "Queued. Waiting for current run."
+            job.progress_text = "Queued"
+            waiting_job_ids.append(job.job_id)
+            job.append_log("Queued. Waiting for current run to finish.")
+        _refresh_queue_positions_locked()
+
+    if start_now:
+        _start_job_thread(job)
+
     return jsonify({"job": job.snapshot()}), 201
 
 
@@ -310,6 +367,26 @@ def stop_job(job_id: str):
     job = jobs.get(job_id)
     if job is None:
         return jsonify({"error": "Job not found."}), 404
+
+    payload = request.get_json(silent=True) or request.form.to_dict()
+    client_id = str(payload.get("client_id", "")).strip()
+    if client_id != job.owner_client_id:
+        return jsonify({"error": "Only the job owner can stop this run."}), 403
+
+    if job.status == "queued":
+        with jobs_lock:
+            try:
+                waiting_job_ids.remove(job.job_id)
+            except ValueError:
+                pass
+            _refresh_queue_positions_locked()
+        with job.lock:
+            job.status = "stopped"
+            job.message = "Stopped."
+            job.progress_text = "Stopped"
+            job.logs.append("Process was cancelled before start.")
+        return jsonify({"ok": True})
+
     job.control.request_stop()
     with job.lock:
         if job.status == "running":
@@ -322,6 +399,12 @@ def clear_job_logs(job_id: str):
     job = jobs.get(job_id)
     if job is None:
         return jsonify({"error": "Job not found."}), 404
+
+    payload = request.get_json(silent=True) or request.form.to_dict()
+    client_id = str(payload.get("client_id", "")).strip()
+    if client_id != job.owner_client_id:
+        return jsonify({"error": "Only the job owner can clear logs."}), 403
+
     with job.lock:
         job.logs.clear()
     return jsonify({"ok": True})

@@ -10,7 +10,20 @@ const progressText = document.getElementById("progress-text");
 const progressPercent = document.getElementById("progress-percent");
 const progressFill = document.getElementById("progress-fill");
 
+const CLIENT_ID_KEY = "fb_scraper_client_id";
 let currentJobId = null;
+
+function getClientId() {
+  const existing = localStorage.getItem(CLIENT_ID_KEY);
+  if (existing) return existing;
+  const next = (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : `client-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  localStorage.setItem(CLIENT_ID_KEY, next);
+  return next;
+}
+
+const clientId = getClientId();
 
 function setBadge(status) {
   jobState.textContent = status ? status[0].toUpperCase() + status.slice(1) : "Idle";
@@ -39,9 +52,14 @@ function setJobUi(job) {
 
   currentJobId = job.job_id;
   setBadge(job.status);
-  jobMessage.textContent = job.message || "Working...";
+  const owner = job.owner_client_id === clientId;
+  if (job.status === "queued" && Number(job.queue_position) > 0) {
+    jobMessage.textContent = `Queued. Position ${job.queue_position}.`;
+  } else {
+    jobMessage.textContent = job.message || "Working...";
+  }
   setProgress(job.progress_percent, job.progress_text);
-  stopBtn.disabled = !(job.status === "queued" || job.status === "running");
+  stopBtn.disabled = !owner || !(job.status === "queued" || job.status === "running");
 
   if (job.status === "completed") {
     downloadBtn.classList.remove("disabled");
@@ -64,20 +82,21 @@ function setJobUi(job) {
 }
 
 async function refreshActiveJob() {
-  const response = await fetch("/api/active-job");
+  if (currentJobId) {
+    const ownJobResponse = await fetch(`/api/jobs/${currentJobId}`);
+    if (ownJobResponse.ok) {
+      const ownJobData = await ownJobResponse.json();
+      setJobUi(ownJobData.job);
+      return;
+    }
+    currentJobId = null;
+  }
+
+  const response = await fetch(`/api/active-job?client_id=${encodeURIComponent(clientId)}`);
   const data = await response.json();
   if (data.job) {
     setJobUi(data.job);
     return;
-  }
-
-  if (currentJobId) {
-    const finishedResponse = await fetch(`/api/jobs/${currentJobId}`);
-    if (finishedResponse.ok) {
-      const finishedData = await finishedResponse.json();
-      setJobUi(finishedData.job);
-      return;
-    }
   }
 
   setJobUi(null);
@@ -90,6 +109,7 @@ form.addEventListener("submit", async (event) => {
     search_word: document.getElementById("search_word").value.trim(),
     group_links_number: document.getElementById("group_links_number").value.trim(),
     posts_from_each_group: document.getElementById("posts_from_each_group").value.trim(),
+    client_id: clientId,
   };
 
   runBtn.disabled = true;
@@ -115,7 +135,15 @@ form.addEventListener("submit", async (event) => {
 stopBtn.addEventListener("click", async () => {
   if (!currentJobId) return;
   stopBtn.disabled = true;
-  await fetch(`/api/jobs/${currentJobId}/stop`, { method: "POST" });
+  const response = await fetch(`/api/jobs/${currentJobId}/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    jobMessage.textContent = data.error || "Could not stop this job.";
+  }
 });
 
 clearLogsBtn.addEventListener("click", () => {
@@ -124,12 +152,20 @@ clearLogsBtn.addEventListener("click", () => {
     return;
   }
 
-  fetch(`/api/jobs/${currentJobId}/clear-logs`, { method: "POST" })
-    .then(() => {
+  fetch(`/api/jobs/${currentJobId}/clear-logs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Could not clear logs.");
+      }
       logOutput.textContent = "Logs cleared.";
     })
-    .catch(() => {
-      jobMessage.textContent = "Could not clear logs.";
+    .catch((error) => {
+      jobMessage.textContent = error.message || "Could not clear logs.";
     });
 });
 
