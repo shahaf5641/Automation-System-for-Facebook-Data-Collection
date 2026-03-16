@@ -9,9 +9,14 @@ const logOutput = document.getElementById("log-output");
 const progressText = document.getElementById("progress-text");
 const progressPercent = document.getElementById("progress-percent");
 const progressFill = document.getElementById("progress-fill");
+const themeToggle = document.getElementById("theme-toggle");
+const themeLabel = document.getElementById("theme-label");
+const themeIcon = document.getElementById("theme-icon");
 
 const CLIENT_ID_KEY = "fb_scraper_client_id";
+const THEME_KEY = "fb_scraper_theme";
 let currentJobId = null;
+let autoScrollLogs = true;
 
 function getClientId() {
   const existing = localStorage.getItem(CLIENT_ID_KEY);
@@ -24,6 +29,43 @@ function getClientId() {
 }
 
 const clientId = getClientId();
+
+function applyTheme(theme) {
+  const normalized = theme === "dark" ? "dark" : "light";
+  document.body.setAttribute("data-theme", normalized);
+  if (themeLabel) {
+    themeLabel.textContent = normalized === "dark" ? "Light Mode" : "Dark Mode";
+  }
+  if (themeIcon) {
+    themeIcon.textContent = normalized === "dark" ? "☀️" : "🌙";
+  }
+}
+
+function resolveInitialTheme() {
+  const stored = localStorage.getItem(THEME_KEY);
+  if (stored === "dark" || stored === "light") return stored;
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    return "dark";
+  }
+  return "light";
+}
+
+applyTheme(resolveInitialTheme());
+
+if (themeToggle) {
+  themeToggle.addEventListener("click", () => {
+    const current = document.body.getAttribute("data-theme") || "light";
+    const next = current === "dark" ? "light" : "dark";
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+  });
+}
+
+logOutput.addEventListener("scroll", () => {
+  const threshold = 20;
+  autoScrollLogs =
+    logOutput.scrollTop + logOutput.clientHeight >= logOutput.scrollHeight - threshold;
+});
 
 function setBadge(status) {
   jobState.textContent = status ? status[0].toUpperCase() + status.slice(1) : "Idle";
@@ -74,8 +116,11 @@ function setJobUi(job) {
   }
 
   if (job.logs && job.logs.length) {
+    const wasAtBottom = autoScrollLogs;
     logOutput.textContent = job.logs.join("\n");
-    logOutput.scrollTop = logOutput.scrollHeight;
+    if (wasAtBottom) {
+      logOutput.scrollTop = logOutput.scrollHeight;
+    }
   } else {
     logOutput.textContent = "Waiting for process logs...";
   }
@@ -163,6 +208,7 @@ clearLogsBtn.addEventListener("click", () => {
         throw new Error(data.error || "Could not clear logs.");
       }
       logOutput.textContent = "Logs cleared.";
+      autoScrollLogs = true;
     })
     .catch((error) => {
       jobMessage.textContent = error.message || "Could not clear logs.";

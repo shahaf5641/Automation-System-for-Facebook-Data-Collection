@@ -10,21 +10,26 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
+  <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">
+    <span id="theme-icon" class="theme-icon" aria-hidden="true">🌙</span>
+    <span id="theme-label">Dark Mode</span>
+  </button>
   <main class="page-shell">
     <section class="hero-card">
       <div class="hero-copy">
-        <p class="eyebrow">Facebook Scraper</p>
         <h1>{{ app_title }}</h1>
-        <p class="subtitle">Run from browser, sign in once, and export a clean CSV.</p>
-        <div class="login-notice">
-          <strong>Important:</strong> when Facebook opens, log in manually in that Chrome window.
+        <p class="subtitle">One click to collect Facebook posts into a clean, ready-to-filter CSV.</p>
+        <div class="hero-points">
+          <span>Live progress</span>
+          <span>Queue-safe runs</span>
+          <span>One-click export</span>
         </div>
       </div>
 
       <form id="scrape-form" class="control-card">
         <label class="field">
           <span>Search in Facebook</span>
-          <input id="search_word" name="search_word" type="text" placeholder="e.g. רכב יד 2" required>
+          <input id="search_word" name="search_word" type="text" placeholder="e.g. car for sale" required>
         </label>
 
         <label class="field">
@@ -48,7 +53,7 @@
     <section class="status-grid">
       <article class="panel">
         <div class="panel-head">
-          <h2>Status</h2>
+          <h2>Run Status</h2>
           <span id="job-state" class="badge idle">Idle</span>
         </div>
         <p id="job-message" class="status-message">No active job.</p>
@@ -65,13 +70,24 @@
 
       <article class="panel terminal-panel">
         <div class="panel-head">
-          <h2>Process Log</h2>
+          <h2>Process Timeline</h2>
           <button id="clear-logs-btn" type="button" class="clear-btn">Clear</button>
         </div>
         <pre id="log-output" class="terminal">Waiting for a run...</pre>
       </article>
     </section>
   </main>
+  <footer class="app-footer">
+    <div class="footer-brand">
+      <p class="footer-title">Built by Shahaf Israel</p>
+      <p class="footer-subtitle">Software Developer</p>
+    </div>
+    <div class="footer-links">
+      <a href="mailto:shahaf564@gmail.com">shahaf564@gmail.com</a>
+      <a href="https://github.com/shahaf5641" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="https://www.linkedin.com/in/shahaf-israel-0a6502173/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+    </div>
+  </footer>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

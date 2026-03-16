@@ -78,17 +78,17 @@ class ScrapeJob:
         if "Waiting for manual Facebook login" in message:
             self.progress_percent = max(self.progress_percent, 10)
             self.progress_text = "Waiting for Facebook login"
-            return "Chrome opened. Please log in to Facebook in that window."
+            return "Waiting for facebook login"
 
         if "Already logged in" in message:
             self.progress_percent = max(self.progress_percent, 18)
             self.progress_text = "Login ready"
-            return "Already logged in."
+            return "Login succesfully"
 
         if "Manual login completed" in message:
             self.progress_percent = max(self.progress_percent, 18)
             self.progress_text = "Login ready"
-            return "Facebook login is ready."
+            return "Login succesfully"
 
         if "Public groups toggle" in message:
             return None
@@ -99,14 +99,13 @@ class ScrapeJob:
             if self.searching_groups_announced:
                 return None
             self.searching_groups_announced = True
-            return "Searching for matching groups..."
+            return "Searching Groups..."
 
         groups_collected = re.search(r"Collected (\d+) group links\.", message)
         if groups_collected:
-            found = int(groups_collected.group(1))
             self.progress_percent = max(self.progress_percent, 34)
             self.progress_text = "Groups list ready"
-            return f"Found {found} matching groups."
+            return None
 
         opening_group = re.search(r"\[(\d+)/(\d+)\] Opening group:", message)
         if opening_group:
@@ -333,7 +332,7 @@ def create_job():
     )
     job.target_posts = settings.expected_table_size
     job.total_groups = settings.group_links_number
-    job.append_log("Ready to start.")
+    job.append_log("Preparing run...")
     start_now = False
     with jobs_lock:
         jobs[job.job_id] = job

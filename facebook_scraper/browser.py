@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 from selenium import webdriver
+from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
@@ -13,11 +15,29 @@ logger = logging.getLogger(__name__)
 
 
 def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") -> webdriver.Chrome:
-    chrome_options = Options()
     profile_path = Path(profile_dir).resolve()
     profile_path.mkdir(parents=True, exist_ok=True)
     _seed_profile_from_installed_chrome(profile_path)
 
+    logger.info("Starting Chrome driver...")
+    logger.info("Using Chrome profile directory: %s", profile_path)
+    _remove_stale_profile_locks(profile_path)
+
+    try:
+        return _start_driver_with_profile(profile_path, headless=headless)
+    except (SessionNotCreatedException, WebDriverException) as exc:
+        if not _is_devtools_startup_crash(exc):
+            raise
+        logger.warning(
+            "Chrome startup crashed with persistent profile. Retrying with a runtime cloned profile."
+        )
+        fallback_dir = profile_path.parent / f"{profile_path.name}-runtime-{uuid.uuid4().hex[:6]}"
+        _clone_profile_directory(profile_path, fallback_dir)
+        return _start_driver_with_profile(fallback_dir, headless=headless)
+
+
+def _start_driver_with_profile(profile_path: Path, headless: bool) -> webdriver.Chrome:
+    chrome_options = Options()
     chrome_options.add_argument("--ignore-certificate-errors")
     chrome_options.add_argument("--disable-usb-keyboard-detect")
     chrome_options.add_argument("--disable-notifications")
@@ -28,6 +48,9 @@ def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") ->
     chrome_options.add_argument("--start-minimized")
     chrome_options.add_argument("--lang=he-IL")
     chrome_options.add_argument("--window-size=1600,1000")
+    chrome_options.add_argument("--remote-debugging-port=0")
+    chrome_options.add_argument("--no-first-run")
+    chrome_options.add_argument("--no-default-browser-check")
     chrome_options.add_argument(f"--user-data-dir={profile_path}")
     chrome_options.add_argument("--profile-directory=Default")
     chrome_options.page_load_strategy = "eager"
@@ -46,9 +69,6 @@ def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") ->
     if headless:
         chrome_options.add_argument("--headless=new")
 
-    logger.info("Starting Chrome driver...")
-    logger.info("Using Chrome profile directory: %s", profile_path)
-    # Selenium Manager (bundled with modern Selenium) resolves the driver automatically.
     service = Service(log_output=os.devnull)
     driver = webdriver.Chrome(options=chrome_options, service=service)
     try:
@@ -56,6 +76,41 @@ def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") ->
     except Exception:
         pass
     return driver
+
+
+def _is_devtools_startup_crash(exc: Exception) -> bool:
+    message = str(exc)
+    return "DevToolsActivePort file doesn't exist" in message or "Chrome failed to start" in message
+
+
+def _remove_stale_profile_locks(profile_path: Path) -> None:
+    lock_files = ("SingletonLock", "SingletonCookie", "SingletonSocket", "LOCK")
+    for file_name in lock_files:
+        lock_path = profile_path / file_name
+        if not lock_path.exists():
+            continue
+        try:
+            lock_path.unlink()
+        except OSError:
+            logger.debug("Could not remove stale lock file: %s", lock_path)
+
+
+def _clone_profile_directory(source: Path, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir(parents=True, exist_ok=True)
+
+    source_local_state = source / "Local State"
+    if source_local_state.exists():
+        try:
+            shutil.copy2(source_local_state, destination / "Local State")
+        except OSError:
+            logger.debug("Could not copy Local State into fallback profile directory.")
+
+    source_default = source / "Default"
+    destination_default = destination / "Default"
+    if source_default.exists():
+        _copy_profile_tree(source_default, destination_default)
 
 
 def _seed_profile_from_installed_chrome(profile_path: Path) -> None:

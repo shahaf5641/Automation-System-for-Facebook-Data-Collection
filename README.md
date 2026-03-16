@@ -1,42 +1,36 @@
-# Facebook Groups Scraper
+# Facebook Data Extractor
 
-A simple tool for collecting Facebook group posts based on a search keyword.
+Web-based Facebook groups scraper that opens Chrome, searches groups, extracts posts, and exports CSV.
 
 ## System Flow
 
 ![System Flow](docs/system-flow.svg)
 
-The script:
-- opens Chrome
-- uses the Facebook account already logged in, or waits for manual login
-- searches for groups by keyword
-- enables the `Public groups` filter before collecting links
-- opens groups
-- collects posts
-- saves the results to a CSV file
+## What This Project Does
 
-## What It Is For
+- Searches Facebook groups by your search phrase
+- Enables `Public groups` filter before collecting links
+- Collects posts from groups and writes CSV rows with:
+  - `Author`
+  - `Post Time`
+  - `Content`
+  - `Post Link`
+- Provides a modern web UI to run, stop, monitor progress, and download CSV
 
-Use this tool if you want to collect Facebook group posts into a clean CSV or Excel-friendly file.
+## Who Needs Installation?
 
-Examples:
-- apartment posts
-- car posts
-- job posts
-- posts about any topic you search for
+- **End users (people you send the link to):** no installation needed.
+- **Only the host machine (your PC/server):** needs Python, Chrome, and project setup.
 
-## What You Need
+## Host Requirements
 
-Before running the script, make sure you have:
 - Windows
-- Python installed
+- Python 3.10+ (recommended: 3.12)
 - Google Chrome installed
-- internet connection
-- a Facebook account you can log into through Chrome
+- Internet connection
+- A Facebook account available on the machine running the scraper
 
-## Installation
-
-Open a terminal inside the project folder and run:
+## Host Installation
 
 ```powershell
 python -m venv .venv
@@ -44,102 +38,117 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## How To Run
-
-```powershell
-python main.py
-```
-
-A setup app window opens and asks for 3 values:
-
-1. `Search word`
-2. `Group links number`
-3. `Posts from each group`
-
-Use `Run` to start and `Stop` to cancel the current process.
-
-The app also includes a built-in terminal panel that streams all scraper logs in real time.
-
-If the GUI cannot open in your environment, the script automatically falls back to terminal prompts.
-
-## Run As Website
-
-To run the project as a web app:
+## Run on Host Machine (Web App - Recommended)
 
 ```powershell
 python app.py
 ```
 
-Then open:
+Open:
 
 ```text
 http://localhost:5000
 ```
 
-The web app lets a client:
-- enter the scraper inputs from the browser
-- start and stop a scraping job
-- watch process logs
-- download the finished CSV
+If you expose this app with ngrok, users open the ngrok URL in their browser and use it directly.
+They do **not** install Python, ChromeDriver, or this repository.
 
-Important:
-- the scraping still runs on the server machine
-- Chrome must be installed on that machine
-- the Facebook login also happens on that machine
-- if you want to send a public link to a client, you need to deploy this app on a server or a Windows machine you control
+### Web UI Features
 
-## Build EXE For Client
+- `Run` starts a new scraping job
+- `Stop` stops your own current job
+- `Process Timeline` shows user-friendly progress logs
+- `Download CSV` becomes active when run is complete
+- `Clear` clears timeline logs for your job
 
-Run:
+### Queue Behavior (Important)
+
+- Only **one** scraping run can execute at a time on one machine (one Chrome automation session).
+- If another user starts while a run is active, the new run is queued.
+- Each browser gets its own `client_id`, and users can control only their own jobs.
+
+## Run (Desktop/CLI Fallback)
+
+```powershell
+python main.py
+```
+
+If UI is unavailable, the script falls back to terminal prompts.
+
+## Build Client Package (EXE)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-The client-ready package will be created under:
+Output package:
+
 - `release\FacebookDataExtractor-<timestamp>`
 
-Inside that folder, send everything as-is to the client.
+## Input Fields
 
-## What Each Input Means
+### `Search in Facebook`
 
-### `Search word`
-
-The keyword or phrase used to search for Facebook groups.
-
-Examples:
-- `house`
-- `jobs`
-- `cars`
-- `apartments`
+Phrase sent to Facebook search.
 
 ### `Group links number`
 
-How many groups the script should try to process.
-
-Example:
-- if you enter `10`, the script will try to work on 10 groups
+Requested number of groups to process.
 
 ### `Posts from each group`
 
-How many posts to collect from each group.
+Requested number of posts per group.
 
-Example:
-- if you enter `30`, the script will try to collect up to 30 posts from each group
+> Expected rows = `group_links_number * posts_from_each_group` (best effort, based on available data and page behavior).
 
-## Output File
+## Output
 
-CSV file that contains these columns:
-- `Author`
-- `Post Time`
-- `Content`
-- `Post Link`
+- Web mode: files are created under `web_outputs\facebookposts-<job_id>.csv`
+- Download endpoint serves the result as `facebookposts.csv`
 
-## Quick Summary
+## Share with Others (ngrok)
 
-1. Install the requirements
-2. Run `python main.py`
-3. Fill the setup window (search word, number of groups, and number of posts)
-4. Log into Facebook if needed
-5. Wait for the script to finish
-6. Open `facebookposts.csv`
+If you want to share a temporary public link to your local app:
+
+1. Run the app:
+
+```powershell
+python app.py
+```
+
+2. Run ngrok to expose port 5000:
+
+```powershell
+ngrok http 5000
+```
+
+3. Send the `https://...ngrok...` URL.
+
+### What End Users Need
+
+- Only the link
+- A browser
+- No local installation
+
+### ngrok Notes
+
+- The scraping still runs on **your** machine.
+- Remote users trigger jobs on your local server and local Chrome.
+- If your machine/app is off, the link will not work.
+- If multiple users run at the same time, jobs are queued (one active run at a time).
+
+## Troubleshooting
+
+### Push blocked by GitHub secret scanning
+
+Do not commit browser profile/cache/history folders (`web_profiles/**` should be ignored).  
+If sensitive data was already committed, rewrite history and rotate exposed credentials.
+
+### ngrok not recognized
+
+Make sure ngrok is installed and in PATH, or run the full executable path.
+
+### Chrome/FB login behavior
+
+Automation uses a persistent Chrome profile folder in `web_profiles\persistent-profile`.
+Keep only automation-safe profile data in the repo (prefer ignoring this directory in git).
