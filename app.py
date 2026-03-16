@@ -332,6 +332,7 @@ def create_job():
     )
     job.target_posts = settings.expected_table_size
     job.total_groups = settings.group_links_number
+    job.append_log("Note: this run executes on the host computer.")
     job.append_log("Preparing run...")
     start_now = False
     with jobs_lock:
