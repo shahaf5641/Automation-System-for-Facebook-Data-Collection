@@ -3,14 +3,16 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
 
 from facebook_scraper.config import Settings, SettingsError
+from facebook_scraper.job_store import BaseJobStore, build_job_store
 from facebook_scraper.runner import DriverControl, configure_logging, run_scraper
 
 APP_TITLE = "Facebook Data Extractor"
@@ -34,6 +36,7 @@ class JobLogHandler(logging.Handler):
             return
         try:
             self.job.ingest_log(record.getMessage(), record.levelno)
+            _sync_job(self.job)
         except Exception:
             self.handleError(record)
 
@@ -56,12 +59,16 @@ class ScrapeJob:
     total_groups: int = 0
     searching_groups_announced: bool = False
     queue_position: int = 0
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    finished_at: float = 0.0
     thread: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def append_log(self, line: str) -> None:
         with self.lock:
             self.logs.append(line)
+            self.updated_at = time.time()
 
     def ingest_log(self, message: str, levelno: int) -> None:
         with self.lock:
@@ -69,6 +76,7 @@ class ScrapeJob:
             if not friendly:
                 return
             self.logs.append(friendly)
+            self.updated_at = time.time()
 
     def _friendly_log_message(self, message: str, levelno: int) -> str | None:
         if levelno >= logging.ERROR:
@@ -158,11 +166,13 @@ class ScrapeJob:
 
     def snapshot(self) -> dict:
         with self.lock:
+            output_ready = bool(self.output_file and Path(self.output_file).exists())
             return {
                 "job_id": self.job_id,
                 "status": self.status,
                 "message": self.message,
                 "output_file": self.output_file,
+                "output_ready": output_ready,
                 "logs": list(self.logs),
                 "progress_percent": self.progress_percent,
                 "progress_text": self.progress_text,
@@ -170,26 +180,141 @@ class ScrapeJob:
                 "target_posts": self.target_posts,
                 "owner_client_id": self.owner_client_id,
                 "queue_position": self.queue_position,
+                "search_word": self.settings.search_word,
+                "group_links_number": self.settings.group_links_number,
+                "posts_from_each_group": self.settings.posts_from_each_group,
+                "created_at": self.created_at,
+                "updated_at": self.updated_at,
+                "finished_at": self.finished_at,
             }
+
+    def to_record(self) -> dict:
+        with self.lock:
+            return {
+                "job_id": self.job_id,
+                "settings": asdict(self.settings),
+                "owner_client_id": self.owner_client_id,
+                "status": self.status,
+                "message": self.message,
+                "output_file": self.output_file,
+                "logs": list(self.logs),
+                "target_posts": self.target_posts,
+                "captured_posts": self.captured_posts,
+                "progress_percent": self.progress_percent,
+                "progress_text": self.progress_text,
+                "current_group": self.current_group,
+                "total_groups": self.total_groups,
+                "searching_groups_announced": self.searching_groups_announced,
+                "queue_position": self.queue_position,
+                "created_at": self.created_at,
+                "updated_at": self.updated_at,
+                "finished_at": self.finished_at,
+            }
+
+    @classmethod
+    def from_record(cls, record: dict) -> "ScrapeJob":
+        settings = Settings(**record["settings"])
+        job = cls(
+            job_id=record["job_id"],
+            settings=settings,
+            owner_client_id=record["owner_client_id"],
+        )
+        job.status = record.get("status", "queued")
+        job.message = record.get("message", "Waiting to start")
+        job.output_file = record.get("output_file", "")
+        job.logs = deque(record.get("logs", []), maxlen=400)
+        job.target_posts = int(record.get("target_posts", 0) or 0)
+        job.captured_posts = int(record.get("captured_posts", 0) or 0)
+        job.progress_percent = int(record.get("progress_percent", 0) or 0)
+        job.progress_text = record.get("progress_text", "Ready")
+        job.current_group = int(record.get("current_group", 0) or 0)
+        job.total_groups = int(record.get("total_groups", 0) or 0)
+        job.searching_groups_announced = bool(record.get("searching_groups_announced", False))
+        job.queue_position = int(record.get("queue_position", 0) or 0)
+        job.created_at = float(record.get("created_at", time.time()) or time.time())
+        job.updated_at = float(record.get("updated_at", job.created_at) or job.created_at)
+        job.finished_at = float(record.get("finished_at", 0.0) or 0.0)
+        return job
 
 
 jobs: dict[str, ScrapeJob] = {}
 jobs_lock = threading.Lock()
 active_job_id: str | None = None
 waiting_job_ids: deque[str] = deque()
+job_store: BaseJobStore = build_job_store()
+
+
+def _sync_job(job: ScrapeJob) -> None:
+    with job.lock:
+        job.updated_at = time.time()
+    job_store.save_job(job.job_id, job.to_record())
+
+
+def _list_jobs_for_client(client_id: str) -> list[dict]:
+    if not client_id:
+        return []
+    matching: list[ScrapeJob] = []
+    with jobs_lock:
+        for job_id in job_store.load_all_jobs().keys():
+            job = _load_job(job_id)
+            if job is not None and job.owner_client_id == client_id:
+                matching.append(job)
+    matching.sort(key=lambda job: (job.created_at, job.job_id), reverse=True)
+    return [job.snapshot() for job in matching]
+
+
+def _load_job(job_id: str) -> ScrapeJob | None:
+    job = jobs.get(job_id)
+    if job is not None:
+        return job
+    record = job_store.get_job(job_id)
+    if record is None:
+        return None
+    job = ScrapeJob.from_record(record)
+    jobs[job_id] = job
+    return job
+
+
+def _bootstrap_jobs_from_store() -> None:
+    global active_job_id, waiting_job_ids
+    stored_jobs = job_store.load_all_jobs()
+    for job_id, record in stored_jobs.items():
+        jobs[job_id] = ScrapeJob.from_record(record)
+
+    active_job_id = job_store.get_active_job_id()
+    waiting_job_ids = deque(job_store.list_queue())
+
+    # Running threads cannot survive process restart, so recover stale jobs cleanly.
+    if active_job_id:
+        stale_job = jobs.get(active_job_id)
+        if stale_job is not None and stale_job.status == "running":
+            stale_job.status = "failed"
+            stale_job.message = "Server restarted before completion."
+            stale_job.progress_text = "Failed"
+            stale_job.append_log("The server restarted before this run could finish.")
+            _sync_job(stale_job)
+        active_job_id = None
+        job_store.set_active_job_id(None)
+
+    _refresh_queue_positions_locked()
 
 
 def _set_active_job(job_id: str | None) -> None:
     global active_job_id
     with jobs_lock:
         active_job_id = job_id
+        job_store.set_active_job_id(job_id)
 
 
 def _refresh_queue_positions_locked() -> None:
+    latest_queue = deque(job_store.list_queue())
+    waiting_job_ids.clear()
+    waiting_job_ids.extend(latest_queue)
     for position, queued_job_id in enumerate(waiting_job_ids, start=1):
-        queued_job = jobs.get(queued_job_id)
+        queued_job = _load_job(queued_job_id)
         if queued_job is not None and queued_job.status == "queued":
             queued_job.queue_position = position
+            _sync_job(queued_job)
 
 
 def _start_job_thread(job: ScrapeJob) -> None:
@@ -204,14 +329,19 @@ def _promote_next_queued_job() -> None:
     with jobs_lock:
         if active_job_id is not None:
             return
-        while waiting_job_ids:
-            next_job_id = waiting_job_ids.popleft()
-            candidate = jobs.get(next_job_id)
+        while True:
+            next_job_id = job_store.dequeue_next()
+            if next_job_id is None:
+                break
+            candidate = _load_job(next_job_id)
             if candidate is None or candidate.status != "queued":
                 continue
             active_job_id = next_job_id
+            job_store.set_active_job_id(next_job_id)
             candidate.queue_position = 0
+            candidate.status = "running"
             candidate.message = "Running"
+            _sync_job(candidate)
             next_job = candidate
             break
         _refresh_queue_positions_locked()
@@ -223,7 +353,10 @@ def _get_active_job() -> ScrapeJob | None:
     with jobs_lock:
         if active_job_id is None:
             return None
-        return jobs.get(active_job_id)
+        return _load_job(active_job_id)
+
+
+_bootstrap_jobs_from_store()
 
 
 def _create_settings_from_request(payload: dict) -> Settings:
@@ -268,6 +401,7 @@ def _run_job(job: ScrapeJob) -> None:
         job.message = "Running"
         job.progress_percent = 5
         job.progress_text = "Starting browser"
+    _sync_job(job)
 
     try:
         exit_code = run_scraper(job.settings, control=job.control)
@@ -282,20 +416,25 @@ def _run_job(job: ScrapeJob) -> None:
                 job.message = "CSV file is ready."
                 job.progress_percent = 100
                 job.progress_text = "Completed"
+                job.finished_at = time.time()
             elif exit_code == 2:
                 job.status = "stopped"
                 job.message = "Stopped."
                 if job.progress_percent < 100:
                     job.progress_text = "Stopped"
+                job.finished_at = time.time()
             else:
                 job.status = "failed"
                 job.message = "Finished with errors."
                 if job.progress_percent < 100:
                     job.progress_text = "Failed"
+                job.finished_at = time.time()
+        _sync_job(job)
         global active_job_id
         with jobs_lock:
             if active_job_id == job.job_id:
                 active_job_id = None
+                job_store.set_active_job_id(None)
         _promote_next_queued_job()
 
 
@@ -313,6 +452,12 @@ def get_active_job():
     if client_id and client_id != job.owner_client_id:
         return jsonify({"job": None})
     return jsonify({"job": job.snapshot()})
+
+
+@app.get("/api/jobs")
+def list_jobs():
+    client_id = str(request.args.get("client_id", "")).strip()
+    return jsonify({"jobs": _list_jobs_for_client(client_id)})
 
 
 @app.post("/api/jobs")
@@ -337,15 +482,18 @@ def create_job():
     start_now = False
     with jobs_lock:
         jobs[job.job_id] = job
+        _sync_job(job)
         global active_job_id
         if active_job_id is None:
             active_job_id = job.job_id
+            job_store.set_active_job_id(job.job_id)
             start_now = True
         else:
             job.message = "Queued. Waiting for current run."
             job.progress_text = "Queued"
-            waiting_job_ids.append(job.job_id)
+            job_store.enqueue(job.job_id)
             job.append_log("Queued. Waiting for current run to finish.")
+            _sync_job(job)
         _refresh_queue_positions_locked()
 
     if start_now:
@@ -356,7 +504,7 @@ def create_job():
 
 @app.get("/api/jobs/<job_id>")
 def get_job(job_id: str):
-    job = jobs.get(job_id)
+    job = _load_job(job_id)
     if job is None:
         return jsonify({"error": "Job not found."}), 404
     return jsonify({"job": job.snapshot()})
@@ -364,7 +512,7 @@ def get_job(job_id: str):
 
 @app.post("/api/jobs/<job_id>/stop")
 def stop_job(job_id: str):
-    job = jobs.get(job_id)
+    job = _load_job(job_id)
     if job is None:
         return jsonify({"error": "Job not found."}), 404
 
@@ -375,28 +523,28 @@ def stop_job(job_id: str):
 
     if job.status == "queued":
         with jobs_lock:
-            try:
-                waiting_job_ids.remove(job.job_id)
-            except ValueError:
-                pass
+            job_store.remove_from_queue(job.job_id)
             _refresh_queue_positions_locked()
         with job.lock:
             job.status = "stopped"
             job.message = "Stopped."
             job.progress_text = "Stopped"
+            job.finished_at = time.time()
             job.logs.append("Process was cancelled before start.")
+        _sync_job(job)
         return jsonify({"ok": True})
 
     job.control.request_stop()
     with job.lock:
         if job.status == "running":
             job.message = "Stopping..."
+    _sync_job(job)
     return jsonify({"ok": True})
 
 
 @app.post("/api/jobs/<job_id>/clear-logs")
 def clear_job_logs(job_id: str):
-    job = jobs.get(job_id)
+    job = _load_job(job_id)
     if job is None:
         return jsonify({"error": "Job not found."}), 404
 
@@ -407,12 +555,13 @@ def clear_job_logs(job_id: str):
 
     with job.lock:
         job.logs.clear()
+    _sync_job(job)
     return jsonify({"ok": True})
 
 
 @app.get("/api/jobs/<job_id>/download")
 def download_job_output(job_id: str):
-    job = jobs.get(job_id)
+    job = _load_job(job_id)
     if job is None:
         return jsonify({"error": "Job not found."}), 404
 

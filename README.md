@@ -66,6 +66,27 @@ They do **not** install Python, ChromeDriver, or this repository.
 - Only **one** scraping run can execute at a time on one machine (one Chrome automation session).
 - If another user starts while a run is active, the new run is queued.
 - Each browser gets its own `client_id`, and users can control only their own jobs.
+- The project now supports storing queue and job state in `Redis` when configured.
+
+### Optional Redis Integration
+
+If you want queue and job state to persist outside the Flask process, configure:
+
+1. Start Redis:
+
+```powershell
+docker compose up -d redis
+```
+
+2. Set environment variables and run the app:
+
+```powershell
+$env:REDIS_URL="redis://localhost:6379/0"
+$env:REDIS_PREFIX="facebook_scraper"
+python app.py
+```
+
+If `REDIS_URL` is not set, the app falls back to the previous in-memory behavior.
 
 ## Run (Desktop/CLI Fallback)
 

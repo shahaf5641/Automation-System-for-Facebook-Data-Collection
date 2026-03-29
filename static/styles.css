@@ -261,6 +261,10 @@ button:disabled {
   gap: 22px;
 }
 
+.history-section {
+  margin-top: 22px;
+}
+
 .panel {
   padding: 24px;
 }
@@ -383,6 +387,75 @@ h2 {
   min-height: 420px;
 }
 
+.history-panel {
+  padding-bottom: 18px;
+}
+
+.history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(15, 76, 129, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(241, 247, 255, 0.92) 100%);
+}
+
+.history-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.history-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.history-top strong {
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.history-meta {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.history-actions {
+  flex: 0 0 auto;
+}
+
+.history-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 138px;
+  border-radius: 999px;
+  padding: 11px 15px;
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: none;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--success-1) 0%, var(--success-2) 100%);
+  box-shadow: 0 10px 20px rgba(22, 163, 74, 0.25);
+}
+
+.history-empty {
+  margin: 0;
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
 .terminal {
   margin: 0;
   min-height: 332px;
@@ -475,6 +548,21 @@ h2 {
   .actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .history-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .history-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .history-actions,
+  .history-download {
+    width: 100%;
   }
 
   button:not(.theme-toggle),
@@ -702,6 +790,15 @@ body[data-theme="dark"] .terminal {
   background:
     radial-gradient(circle at 85% 12%, rgba(37, 99, 235, 0.22), transparent 24%),
     linear-gradient(180deg, #020617 0%, #0b1120 100%);
+}
+
+body[data-theme="dark"] .history-item {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.92) 0%, rgba(18, 31, 53, 0.92) 100%);
+  border-color: rgba(96, 165, 250, 0.22);
+}
+
+body[data-theme="dark"] .history-meta {
+  color: #94a3b8;
 }
 
 body[data-theme="dark"] .footer-links a {

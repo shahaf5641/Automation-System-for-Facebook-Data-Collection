@@ -9,6 +9,7 @@ const logOutput = document.getElementById("log-output");
 const progressText = document.getElementById("progress-text");
 const progressPercent = document.getElementById("progress-percent");
 const progressFill = document.getElementById("progress-fill");
+const historyList = document.getElementById("history-list");
 const themeToggle = document.getElementById("theme-toggle");
 const themeLabel = document.getElementById("theme-label");
 const themeIcon = document.getElementById("theme-icon");
@@ -106,6 +107,55 @@ function setProgress(percent, text) {
   progressText.textContent = text || "Ready";
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatRunTime(value) {
+  const numeric = Number(value || 0);
+  if (!numeric) return "Just now";
+  const date = new Date(numeric * 1000);
+  return date.toLocaleString();
+}
+
+function renderHistory(jobs) {
+  if (!historyList) return;
+  if (!jobs || !jobs.length) {
+    historyList.innerHTML = `<p class="history-empty">No runs yet.</p>`;
+    return;
+  }
+
+  historyList.innerHTML = jobs.map((job) => {
+    const downloadHtml = job.output_ready
+      ? `<a class="history-download" href="/api/jobs/${encodeURIComponent(job.job_id)}/download">Download CSV</a>`
+      : `<span class="history-download disabled">CSV Pending</span>`;
+    const whenLabel = job.finished_at ? "Finished" : "Started";
+    const whenValue = job.finished_at || job.created_at;
+    return `
+      <article class="history-item">
+        <div class="history-main">
+          <div class="history-top">
+            <strong>${escapeHtml(job.search_word || "Untitled run")}</strong>
+            <span class="badge ${escapeHtml(job.status || "idle")}">${escapeHtml(job.status || "idle")}</span>
+          </div>
+          <p class="history-meta">
+            ${escapeHtml(`Groups: ${job.group_links_number} | Posts per group: ${job.posts_from_each_group}`)}
+          </p>
+          <p class="history-meta">${escapeHtml(`${whenLabel}: ${formatRunTime(whenValue)}`)}</p>
+        </div>
+        <div class="history-actions">
+          ${downloadHtml}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
 function setJobUi(job) {
   if (!job) {
     currentJobId = null;
@@ -174,6 +224,13 @@ async function refreshActiveJob() {
   setJobUi(null);
 }
 
+async function refreshHistory() {
+  if (!historyList) return;
+  const response = await fetch(`/api/jobs?client_id=${encodeURIComponent(clientId)}`);
+  const data = await response.json();
+  renderHistory(data.jobs || []);
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -201,6 +258,7 @@ form.addEventListener("submit", async (event) => {
   }
 
   setJobUi(data.job);
+  refreshHistory().catch(() => {});
   runBtn.disabled = false;
 });
 
@@ -243,11 +301,11 @@ clearLogsBtn.addEventListener("click", () => {
 });
 
 setInterval(() => {
-  refreshActiveJob().catch(() => {
+  Promise.all([refreshActiveJob(), refreshHistory()]).catch(() => {
     jobMessage.textContent = "Could not refresh job status.";
   });
 }, 1500);
 
-refreshActiveJob().catch(() => {
+Promise.all([refreshActiveJob(), refreshHistory()]).catch(() => {
   jobMessage.textContent = "Could not load job status.";
 });

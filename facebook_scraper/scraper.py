@@ -65,14 +65,17 @@ class FacebookScraper:
         scroll_rounds = 0
         max_scroll_rounds = max(8, desired_count * 2)
 
-        # Collect all group links found on the search page without text-based filtering.
+        # Start from an empty list and only keep group cards whose visible text
+        # looks relevant to the requested search phrase.
         while len(group_links) < desired_count and stagnant_rounds < 10 and scroll_rounds < max_scroll_rounds:
             current_links = self._extract_group_links_from_page()
             logger.info("Search round found %s group-link candidates.", len(current_links))
             before_count = len(group_links)
-            for link in current_links:
-                normalized = self._normalize_group_link(link)
+            for candidate in current_links:
+                normalized = self._normalize_group_link(candidate["href"])
                 if not normalized or normalized in seen:
+                    continue
+                if not self._is_relevant_group_candidate(candidate["label"]):
                     continue
                 seen.add(normalized)
                 group_links.append(normalized)
@@ -253,20 +256,77 @@ class FacebookScraper:
             logger.info("Public groups toggle clicked.")
             self._wait_for_page_settle(timeout=1.0)
 
-    def _extract_group_links_from_page(self) -> list[str]:
+    def _extract_group_links_from_page(self) -> list[dict[str, str]]:
         raw_candidates = self.driver.execute_script(
             """
             const anchors = Array.from(document.querySelectorAll("a[href*='/groups/']"));
             return anchors
-              .map((a) => (a && a.href ? a.href : ""))
-              .filter((href) => !!href);
+              .map((a) => ({
+                href: a && a.href ? a.href : "",
+                label: (a && (a.innerText || a.textContent) ? (a.innerText || a.textContent) : "").trim()
+              }))
+              .filter((candidate) => !!candidate.href);
             """
         )
-        candidates: list[str] = []
-        for href in raw_candidates or []:
+        candidates: list[dict[str, str]] = []
+        for candidate in raw_candidates or []:
+            if not isinstance(candidate, dict):
+                continue
+            href = candidate.get("href", "")
+            label = candidate.get("label", "")
             if isinstance(href, str) and href:
-                candidates.append(href)
+                candidates.append(
+                    {
+                        "href": href,
+                        "label": label if isinstance(label, str) else "",
+                    }
+                )
         return candidates
+
+    def _is_relevant_group_candidate(self, label: str) -> bool:
+        normalized_query = self._normalize_search_text(self.settings.search_word)
+        normalized_label = self._normalize_search_text(label)
+        if not normalized_query or not normalized_label:
+            return False
+        if normalized_query in normalized_label:
+            return True
+
+        query_tokens = self._search_tokens(normalized_query)
+        if not query_tokens:
+            return False
+
+        label_tokens = self._search_tokens(normalized_label)
+        if not label_tokens:
+            return False
+
+        matched_tokens = 0
+        for query_token in query_tokens:
+            query_stem = self._stem_search_token(query_token)
+            if any(
+                query_token in label_token
+                or label_token in query_token
+                or self._stem_search_token(label_token) == query_stem
+                for label_token in label_tokens
+            ):
+                matched_tokens += 1
+
+        minimum_matches = 1 if len(query_tokens) == 1 else max(1, len(query_tokens) // 2)
+        return matched_tokens >= minimum_matches
+
+    def _normalize_search_text(self, value: str) -> str:
+        cleaned = re.sub(r"[^\w\s\u0590-\u05FF]", " ", value or "", flags=re.UNICODE)
+        return re.sub(r"\s+", " ", cleaned).strip().casefold()
+
+    def _search_tokens(self, value: str) -> list[str]:
+        return [token for token in value.split() if len(token) >= 2]
+
+    def _stem_search_token(self, token: str) -> str:
+        if len(token) <= 3:
+            return token
+        for suffix in ("יות", "יים", "ות", "ים", "ה", "ת", "ים", "ות", "s"):
+            if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+                return token[: -len(suffix)]
+        return token
 
     def _expand_see_more_buttons(self) -> None:
         self.driver.execute_script(
