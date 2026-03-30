@@ -1,6 +1,25 @@
-version: "3.9"
-
 services:
+  app:
+    build: .
+    container_name: facebook-scraper-app
+    depends_on:
+      - redis
+      - postgres
+      - selenium
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PREFIX: facebook_scraper
+      REDIS_RETENTION_HOURS: "48"
+      DATABASE_URL: postgresql://facebook_scraper:facebook_scraper@postgres:5432/facebook_scraper
+      RUN_HISTORY_RETENTION_DAYS: "30"
+      SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
+      TZ: Asia/Jerusalem
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./web_outputs:/app/web_outputs
+      - ./web_profiles:/app/web_profiles
+
   redis:
     image: redis:7-alpine
     container_name: facebook-scraper-redis
@@ -10,5 +29,30 @@ services:
     volumes:
       - redis-data:/data
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: facebook-scraper-postgres
+    environment:
+      POSTGRES_DB: facebook_scraper
+      POSTGRES_USER: facebook_scraper
+      POSTGRES_PASSWORD: facebook_scraper
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  selenium:
+    image: selenium/standalone-chromium:latest
+    container_name: facebook-scraper-selenium
+    shm_size: 2gb
+    environment:
+      SE_VNC_NO_PASSWORD: "1"
+      SE_NODE_SESSION_TIMEOUT: "1800"
+      TZ: Asia/Jerusalem
+    ports:
+      - "4444:4444"
+      - "7900:7900"
+
 volumes:
   redis-data:
+  postgres-data:

@@ -44,6 +44,12 @@ class BaseJobStore:
     def list_queue(self) -> list[str]:
         raise NotImplementedError
 
+    def cleanup_terminal_jobs(self, older_than_ts: float) -> int:
+        raise NotImplementedError
+
+    def delete_job(self, job_id: str) -> bool:
+        raise NotImplementedError
+
 
 class MemoryJobStore(BaseJobStore):
     backend_name = "memory"
@@ -88,6 +94,30 @@ class MemoryJobStore(BaseJobStore):
 
     def list_queue(self) -> list[str]:
         return list(self.queue)
+
+    def cleanup_terminal_jobs(self, older_than_ts: float) -> int:
+        removed = 0
+        terminal_statuses = {"completed", "failed", "stopped"}
+        for job_id, record in list(self.jobs.items()):
+            status = str(record.get("status", "")).strip().casefold()
+            finished_at = float(record.get("finished_at", 0.0) or 0.0)
+            updated_at = float(record.get("updated_at", 0.0) or 0.0)
+            reference_ts = finished_at or updated_at
+            if status in terminal_statuses and reference_ts and reference_ts < older_than_ts:
+                self.jobs.pop(job_id, None)
+                self.remove_from_queue(job_id)
+                if self.active_job_id == job_id:
+                    self.active_job_id = None
+                removed += 1
+        return removed
+
+    def delete_job(self, job_id: str) -> bool:
+        existed = job_id in self.jobs
+        self.jobs.pop(job_id, None)
+        self.remove_from_queue(job_id)
+        if self.active_job_id == job_id:
+            self.active_job_id = None
+        return existed
 
 
 class RedisJobStore(BaseJobStore):
@@ -140,6 +170,46 @@ class RedisJobStore(BaseJobStore):
     def list_queue(self) -> list[str]:
         values = self.client.lrange(self._key("queue"), 0, -1)
         return list(values)
+
+    def cleanup_terminal_jobs(self, older_than_ts: float) -> int:
+        jobs_key = self._key("jobs")
+        terminal_statuses = {"completed", "failed", "stopped"}
+        removed_ids: list[str] = []
+        for job_id, payload in self.client.hgetall(jobs_key).items():
+            try:
+                record = json.loads(payload)
+            except json.JSONDecodeError:
+                removed_ids.append(job_id)
+                continue
+            status = str(record.get("status", "")).strip().casefold()
+            finished_at = float(record.get("finished_at", 0.0) or 0.0)
+            updated_at = float(record.get("updated_at", 0.0) or 0.0)
+            reference_ts = finished_at or updated_at
+            if status in terminal_statuses and reference_ts and reference_ts < older_than_ts:
+                removed_ids.append(job_id)
+
+        if not removed_ids:
+            return 0
+
+        pipeline = self.client.pipeline()
+        for job_id in removed_ids:
+            pipeline.hdel(jobs_key, job_id)
+            pipeline.lrem(self._key("queue"), 0, job_id)
+        active_job_id = self.get_active_job_id()
+        if active_job_id in removed_ids:
+            pipeline.delete(self._key("active_job_id"))
+        pipeline.execute()
+        return len(removed_ids)
+
+    def delete_job(self, job_id: str) -> bool:
+        pipeline = self.client.pipeline()
+        pipeline.hdel(self._key("jobs"), job_id)
+        pipeline.lrem(self._key("queue"), 0, job_id)
+        active_job_id = self.get_active_job_id()
+        if active_job_id == job_id:
+            pipeline.delete(self._key("active_job_id"))
+        deleted_jobs, _, *_ = pipeline.execute()
+        return bool(deleted_jobs)
 
 
 def build_job_store() -> BaseJobStore:

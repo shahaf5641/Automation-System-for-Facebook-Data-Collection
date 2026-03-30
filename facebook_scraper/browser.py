@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") -> webdriver.Chrome:
+    remote_url = os.getenv("SELENIUM_REMOTE_URL", "").strip()
+    if remote_url:
+        logger.info("Starting Chrome driver...")
+        logger.info("Using remote Selenium server at %s", remote_url)
+        return _start_remote_driver(headless=headless, remote_url=remote_url)
+
     profile_path = Path(profile_dir).resolve()
     profile_path.mkdir(parents=True, exist_ok=True)
     _seed_profile_from_installed_chrome(profile_path)
@@ -37,6 +43,28 @@ def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") ->
 
 
 def _start_driver_with_profile(profile_path: Path, headless: bool) -> webdriver.Chrome:
+    chrome_options = _build_chrome_options(profile_path, headless=headless)
+    service = Service(log_output=os.devnull)
+    driver = webdriver.Chrome(options=chrome_options, service=service)
+    try:
+        driver.minimize_window()
+    except Exception:
+        pass
+    return driver
+
+
+def _start_remote_driver(headless: bool, remote_url: str) -> webdriver.Remote:
+    chrome_options = _build_chrome_options(None, headless=headless)
+    chrome_options.set_capability("se:timeZone", os.getenv("TZ", "Asia/Jerusalem"))
+    driver = webdriver.Remote(command_executor=remote_url, options=chrome_options)
+    try:
+        driver.minimize_window()
+    except Exception:
+        pass
+    return driver
+
+
+def _build_chrome_options(profile_path: Path | None, headless: bool) -> Options:
     chrome_options = Options()
     chrome_options.add_argument("--ignore-certificate-errors")
     chrome_options.add_argument("--disable-usb-keyboard-detect")
@@ -45,14 +73,16 @@ def _start_driver_with_profile(profile_path: Path, headless: bool) -> webdriver.
     chrome_options.add_argument("--disable-logging")
     chrome_options.add_argument("--log-level=3")
     chrome_options.add_argument("--silent")
-    chrome_options.add_argument("--start-minimized")
     chrome_options.add_argument("--lang=he-IL")
     chrome_options.add_argument("--window-size=1600,1000")
     chrome_options.add_argument("--remote-debugging-port=0")
     chrome_options.add_argument("--no-first-run")
     chrome_options.add_argument("--no-default-browser-check")
-    chrome_options.add_argument(f"--user-data-dir={profile_path}")
-    chrome_options.add_argument("--profile-directory=Default")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    if profile_path is not None:
+        chrome_options.add_argument(f"--user-data-dir={profile_path}")
+        chrome_options.add_argument("--profile-directory=Default")
     chrome_options.page_load_strategy = "eager"
     chrome_options.add_experimental_option(
         "prefs",
@@ -68,14 +98,7 @@ def _start_driver_with_profile(profile_path: Path, headless: bool) -> webdriver.
 
     if headless:
         chrome_options.add_argument("--headless=new")
-
-    service = Service(log_output=os.devnull)
-    driver = webdriver.Chrome(options=chrome_options, service=service)
-    try:
-        driver.minimize_window()
-    except Exception:
-        pass
-    return driver
+    return chrome_options
 
 
 def _is_devtools_startup_crash(exc: Exception) -> bool:

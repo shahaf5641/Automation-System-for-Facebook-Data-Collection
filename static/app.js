@@ -10,6 +10,7 @@ const progressText = document.getElementById("progress-text");
 const progressPercent = document.getElementById("progress-percent");
 const progressFill = document.getElementById("progress-fill");
 const historyList = document.getElementById("history-list");
+const deleteAllRunsBtn = document.getElementById("delete-all-runs-btn");
 const themeToggle = document.getElementById("theme-toggle");
 const themeLabel = document.getElementById("theme-label");
 const themeIcon = document.getElementById("theme-icon");
@@ -134,6 +135,8 @@ function renderHistory(jobs) {
     const downloadHtml = job.output_ready
       ? `<a class="history-download" href="/api/jobs/${encodeURIComponent(job.job_id)}/download">Download CSV</a>`
       : `<span class="history-download disabled">CSV Pending</span>`;
+    const deleteDisabled = job.status === "running" || job.status === "queued";
+    const deleteHtml = `<button class="history-delete"${deleteDisabled ? " disabled" : ""} data-job-id="${escapeHtml(job.job_id)}">Delete</button>`;
     const whenLabel = job.finished_at ? "Finished" : "Started";
     const whenValue = job.finished_at || job.created_at;
     return `
@@ -150,6 +153,7 @@ function renderHistory(jobs) {
         </div>
         <div class="history-actions">
           ${downloadHtml}
+          ${deleteHtml}
         </div>
       </article>
     `;
@@ -231,6 +235,30 @@ async function refreshHistory() {
   renderHistory(data.jobs || []);
 }
 
+async function deleteRun(jobId) {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Could not delete this run.");
+  }
+}
+
+async function deleteAllRuns() {
+  const response = await fetch("/api/jobs", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Could not delete runs.");
+  }
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -299,6 +327,43 @@ clearLogsBtn.addEventListener("click", () => {
       jobMessage.textContent = error.message || "Could not clear logs.";
     });
 });
+
+if (historyList) {
+  historyList.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const deleteButton = target.closest(".history-delete");
+    if (!deleteButton) return;
+    const jobId = deleteButton.getAttribute("data-job-id");
+    if (!jobId) return;
+    if (!window.confirm("Delete this run and its CSV file?")) {
+      return;
+    }
+    deleteButton.setAttribute("disabled", "true");
+    deleteRun(jobId)
+      .then(() => refreshHistory())
+      .catch((error) => {
+        jobMessage.textContent = error.message || "Could not delete this run.";
+      });
+  });
+}
+
+if (deleteAllRunsBtn) {
+  deleteAllRunsBtn.addEventListener("click", () => {
+    if (!window.confirm("Delete all of your saved runs and CSV files?")) {
+      return;
+    }
+    deleteAllRunsBtn.disabled = true;
+    deleteAllRuns()
+      .then(() => refreshHistory())
+      .catch((error) => {
+        jobMessage.textContent = error.message || "Could not delete runs.";
+      })
+      .finally(() => {
+        deleteAllRunsBtn.disabled = false;
+      });
+  });
+}
 
 setInterval(() => {
   Promise.all([refreshActiveJob(), refreshHistory()]).catch(() => {

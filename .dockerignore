@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+.git/
+.vscode/
+web_outputs/
+web_profiles/
+.chrome-profile/

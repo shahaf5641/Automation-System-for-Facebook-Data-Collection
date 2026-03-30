@@ -2,6 +2,12 @@
 
 Web-based Facebook groups scraper that opens Chrome, searches groups, extracts posts, and exports CSV.
 
+## Quick Start
+
+For the full startup flow, see:
+
+- [RUN_SYSTEM.md](/C:/Users/shaha/Desktop/facebook-scraper-polished/RUN_SYSTEM.md)
+
 ## System Flow
 
 ![System Flow](docs/system-flow.svg)
@@ -20,38 +26,46 @@ Web-based Facebook groups scraper that opens Chrome, searches groups, extracts p
 ## Who Needs Installation?
 
 - **End users (people you send the link to):** no installation needed.
-- **Only the host machine (your PC/server):** needs Python, Chrome, and project setup.
+- **Only the host machine (your PC/server):** needs Docker Desktop and project setup.
 
 ## Host Requirements
 
 - Windows
-- Python 3.10+ (recommended: 3.12)
-- Google Chrome installed
+- Docker Desktop
 - Internet connection
 - A Facebook account available on the machine running the scraper
 
-## Host Installation
+## Run with Docker (Recommended)
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-## Run on Host Machine (Web App - Recommended)
-
-```powershell
-python app.py
+docker compose up --build -d
 ```
 
 Open:
 
-```text
+```powershell
 http://localhost:5000
 ```
 
+For Facebook login inside the Selenium browser container, open:
+
+```text
+http://localhost:7900
+```
+
+The noVNC password is disabled for local development in the current compose file.
+
+`requirements.txt` is still required because the Docker image for the Flask app installs Python packages from it during build.
+
+### Docker Services
+
+- `app` - Flask web app
+- `redis` - queue and live job state
+- `postgres` - persistent run history
+- `selenium` - Chrome browser automation
+
 If you expose this app with ngrok, users open the ngrok URL in their browser and use it directly.
-They do **not** install Python, ChromeDriver, or this repository.
+They do **not** install Python, ChromeDriver, Docker, or this repository.
 
 ### Web UI Features
 
@@ -60,6 +74,9 @@ They do **not** install Python, ChromeDriver, or this repository.
 - `Process Timeline` shows user-friendly progress logs
 - `Download CSV` becomes active when run is complete
 - `Clear` clears timeline logs for your job
+- `My Runs` shows your own run history
+- `Delete` removes a specific saved run and its CSV
+- `Delete All` removes all saved runs and CSV files for the current browser user
 
 ### Queue Behavior (Important)
 
@@ -68,43 +85,16 @@ They do **not** install Python, ChromeDriver, or this repository.
 - Each browser gets its own `client_id`, and users can control only their own jobs.
 - The project now supports storing queue and job state in `Redis` when configured.
 
-### Optional Redis Integration
+### Docker Notes
 
-If you want queue and job state to persist outside the Flask process, configure:
-
-1. Start Redis:
-
-```powershell
-docker compose up -d redis
-```
-
-2. Set environment variables and run the app:
-
-```powershell
-$env:REDIS_URL="redis://localhost:6379/0"
-$env:REDIS_PREFIX="facebook_scraper"
-python app.py
-```
-
-If `REDIS_URL` is not set, the app falls back to the previous in-memory behavior.
-
-## Run (Desktop/CLI Fallback)
-
-```powershell
-python main.py
-```
-
-If UI is unavailable, the script falls back to terminal prompts.
-
-## Build Client Package (EXE)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-```
-
-Output package:
-
-- `release\FacebookDataExtractor-<timestamp>`
+- `Redis` stores queue and live job state
+- `PostgreSQL` stores persistent run history
+- default cleanup removes:
+  - Redis terminal jobs older than `48` hours
+  - PostgreSQL run history older than `30` days
+- `Selenium` exposes:
+  - `4444` for WebDriver
+  - `7900` for noVNC browser access
 
 ## Input Fields
 
@@ -134,7 +124,7 @@ If you want to share a temporary public link to your local app:
 1. Run the app:
 
 ```powershell
-python app.py
+docker compose up --build -d
 ```
 
 2. Run ngrok to expose port 5000:
@@ -154,7 +144,7 @@ ngrok http 5000
 ### ngrok Notes
 
 - The scraping still runs on **your** machine.
-- Remote users trigger jobs on your local server and local Chrome.
+- Remote users trigger jobs on your Dockerized local server and Selenium browser.
 - If your machine/app is off, the link will not work.
 - If multiple users run at the same time, jobs are queued (one active run at a time).
 
@@ -171,5 +161,8 @@ Make sure ngrok is installed and in PATH, or run the full executable path.
 
 ### Chrome/FB login behavior
 
-Automation uses a persistent Chrome profile folder in `web_profiles\persistent-profile`.
-Keep only automation-safe profile data in the repo (prefer ignoring this directory in git).
+When Facebook login is required, use:
+
+- `http://localhost:7900`
+
+That page shows the Selenium browser through noVNC so you can log in manually when needed.

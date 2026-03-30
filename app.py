@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -13,6 +14,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 
 from facebook_scraper.config import Settings, SettingsError
 from facebook_scraper.job_store import BaseJobStore, build_job_store
+from facebook_scraper.run_history_store import BaseRunHistoryStore, build_run_history_store
 from facebook_scraper.runner import DriverControl, configure_logging, run_scraper
 
 APP_TITLE = "Facebook Data Extractor"
@@ -242,17 +244,49 @@ jobs_lock = threading.Lock()
 active_job_id: str | None = None
 waiting_job_ids: deque[str] = deque()
 job_store: BaseJobStore = build_job_store()
+run_history_store: BaseRunHistoryStore = build_run_history_store()
 
 
 def _sync_job(job: ScrapeJob) -> None:
     with job.lock:
         job.updated_at = time.time()
-    job_store.save_job(job.job_id, job.to_record())
+    record = job.to_record()
+    job_store.save_job(job.job_id, record)
+    run_history_store.upsert_job(record)
+
+
+def _cleanup_stores() -> None:
+    redis_retention_hours = float(os.getenv("REDIS_RETENTION_HOURS", "48") or 48)
+    history_retention_days = float(os.getenv("RUN_HISTORY_RETENTION_DAYS", "30") or 30)
+    now = time.time()
+    redis_cutoff = now - (redis_retention_hours * 3600)
+    history_cutoff = now - (history_retention_days * 86400)
+
+    try:
+        removed_jobs = job_store.cleanup_terminal_jobs(redis_cutoff)
+        if removed_jobs:
+            logger.info("Cleaned up %s old terminal jobs from %s store.", removed_jobs, job_store.backend_name)
+    except Exception as exc:
+        logger.warning("Could not clean up %s store: %s", job_store.backend_name, exc)
+
+    try:
+        removed_history = run_history_store.cleanup_old_runs(history_cutoff)
+        if removed_history:
+            logger.info(
+                "Cleaned up %s old runs from %s history store.",
+                removed_history,
+                run_history_store.backend_name,
+            )
+    except Exception as exc:
+        logger.warning("Could not clean up %s history store: %s", run_history_store.backend_name, exc)
 
 
 def _list_jobs_for_client(client_id: str) -> list[dict]:
     if not client_id:
         return []
+    history_jobs = run_history_store.list_jobs_for_client(client_id)
+    if history_jobs:
+        return history_jobs
     matching: list[ScrapeJob] = []
     with jobs_lock:
         for job_id in job_store.load_all_jobs().keys():
@@ -261,6 +295,54 @@ def _list_jobs_for_client(client_id: str) -> list[dict]:
                 matching.append(job)
     matching.sort(key=lambda job: (job.created_at, job.job_id), reverse=True)
     return [job.snapshot() for job in matching]
+
+
+def _delete_job_artifacts(output_file: str) -> None:
+    path = Path(str(output_file or "").strip())
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("Could not delete output file: %s", path)
+
+
+def _delete_job_for_owner(job_id: str, client_id: str) -> tuple[bool, str]:
+    job = _load_job(job_id)
+    if job is not None:
+        if job.owner_client_id != client_id:
+            return False, "Only the job owner can delete this run."
+        if job.status in {"queued", "running"}:
+            return False, "You can only delete completed, failed, or stopped runs."
+        output_file = job.output_file
+        with jobs_lock:
+            jobs.pop(job_id, None)
+            job_store.delete_job(job_id)
+            _refresh_queue_positions_locked()
+        run_history_store.delete_job(job_id)
+        _delete_job_artifacts(output_file)
+        return True, ""
+
+    record = run_history_store.get_job(job_id)
+    if record is None:
+        return False, "Job not found."
+    if str(record.get("owner_client_id", "")).strip() != client_id:
+        return False, "Only the job owner can delete this run."
+    status = str(record.get("status", "")).strip()
+    if status in {"queued", "running"}:
+        return False, "You can only delete completed, failed, or stopped runs."
+    run_history_store.delete_job(job_id)
+    job_store.delete_job(job_id)
+    _delete_job_artifacts(str(record.get("output_file", "")).strip())
+    return True, ""
+
+
+def _delete_all_jobs_for_owner(client_id: str) -> int:
+    removed = 0
+    for job in _list_jobs_for_client(client_id):
+        success, _ = _delete_job_for_owner(job["job_id"], client_id)
+        if success:
+            removed += 1
+    return removed
 
 
 def _load_job(job_id: str) -> ScrapeJob | None:
@@ -357,6 +439,7 @@ def _get_active_job() -> ScrapeJob | None:
 
 
 _bootstrap_jobs_from_store()
+_cleanup_stores()
 
 
 def _create_settings_from_request(payload: dict) -> Settings:
@@ -435,6 +518,7 @@ def _run_job(job: ScrapeJob) -> None:
             if active_job_id == job.job_id:
                 active_job_id = None
                 job_store.set_active_job_id(None)
+        _cleanup_stores()
         _promote_next_queued_job()
 
 
@@ -458,6 +542,16 @@ def get_active_job():
 def list_jobs():
     client_id = str(request.args.get("client_id", "")).strip()
     return jsonify({"jobs": _list_jobs_for_client(client_id)})
+
+
+@app.delete("/api/jobs")
+def delete_all_jobs():
+    payload = request.get_json(silent=True) or request.form.to_dict()
+    client_id = str(payload.get("client_id", "")).strip()
+    if not client_id:
+        return jsonify({"error": "client_id is required."}), 400
+    removed = _delete_all_jobs_for_owner(client_id)
+    return jsonify({"ok": True, "deleted": removed})
 
 
 @app.post("/api/jobs")
@@ -505,9 +599,12 @@ def create_job():
 @app.get("/api/jobs/<job_id>")
 def get_job(job_id: str):
     job = _load_job(job_id)
-    if job is None:
+    if job is not None:
+        return jsonify({"job": job.snapshot()})
+    record = run_history_store.get_job(job_id)
+    if record is None:
         return jsonify({"error": "Job not found."}), 404
-    return jsonify({"job": job.snapshot()})
+    return jsonify({"job": ScrapeJob.from_record(record).snapshot()})
 
 
 @app.post("/api/jobs/<job_id>/stop")
@@ -559,13 +656,29 @@ def clear_job_logs(job_id: str):
     return jsonify({"ok": True})
 
 
+@app.delete("/api/jobs/<job_id>")
+def delete_job(job_id: str):
+    payload = request.get_json(silent=True) or request.form.to_dict()
+    client_id = str(payload.get("client_id", "")).strip()
+    if not client_id:
+        return jsonify({"error": "client_id is required."}), 400
+    success, error = _delete_job_for_owner(job_id, client_id)
+    if not success:
+        status_code = 404 if error == "Job not found." else 403 if "owner" in error else 400
+        return jsonify({"error": error}), status_code
+    return jsonify({"ok": True})
+
+
 @app.get("/api/jobs/<job_id>/download")
 def download_job_output(job_id: str):
     job = _load_job(job_id)
-    if job is None:
-        return jsonify({"error": "Job not found."}), 404
-
-    output_path = Path(job.settings.output_file)
+    if job is not None:
+        output_path = Path(job.settings.output_file)
+    else:
+        record = run_history_store.get_job(job_id)
+        if record is None:
+            return jsonify({"error": "Job not found."}), 404
+        output_path = Path(str(record.get("output_file", "")).strip())
     if not output_path.exists():
         return jsonify({"error": "Output file is not ready yet."}), 404
 

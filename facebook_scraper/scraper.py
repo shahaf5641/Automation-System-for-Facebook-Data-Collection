@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from pathlib import Path
 from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
@@ -37,11 +39,20 @@ class FacebookScraper:
     def login(self) -> None:
         self._open_facebook_in_new_tab()
         self._wait_for_page_settle(timeout=3.0)
+        self._dismiss_cookie_banners()
         if self._is_logged_in_fast():
             logger.info("Already logged in, skipping login process.")
             return
+        if self._try_restore_login_cookies():
+            self.driver.get("https://www.facebook.com/")
+            self._wait_for_page_settle(timeout=3.0)
+            self._dismiss_cookie_banners()
+            if self._is_logged_in_fast():
+                logger.info("Restored Facebook login from saved cookies.")
+                return
         logger.info("Waiting for manual Facebook login in the opened Chrome window...")
         self._wait_for_manual_login()
+        self._persist_login_cookies()
         logger.info("Manual login completed.")
 
     def _open_facebook_in_new_tab(self) -> None:
@@ -51,6 +62,51 @@ class FacebookScraper:
         handles = self.driver.window_handles
         if handles:
             self.driver.switch_to.window(handles[-1])
+
+    def _cookies_file_path(self) -> Path:
+        profile_dir = Path(self.settings.chrome_profile_dir)
+        base_dir = profile_dir.parent if profile_dir.name else profile_dir
+        return base_dir / "facebook_cookies.json"
+
+    def _try_restore_login_cookies(self) -> bool:
+        cookies_path = self._cookies_file_path()
+        if not cookies_path.exists():
+            return False
+        try:
+            cookies = json.loads(cookies_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(cookies, list) or not cookies:
+            return False
+
+        restored = 0
+        for cookie in cookies:
+            if not isinstance(cookie, dict) or not cookie.get("name") or not cookie.get("value"):
+                continue
+            payload = dict(cookie)
+            same_site = payload.get("sameSite")
+            if same_site not in {"Strict", "Lax", "None"}:
+                payload.pop("sameSite", None)
+            if payload.get("expiry") is not None:
+                try:
+                    payload["expiry"] = int(payload["expiry"])
+                except (TypeError, ValueError):
+                    payload.pop("expiry", None)
+            try:
+                self.driver.add_cookie(payload)
+                restored += 1
+            except Exception:
+                continue
+        return restored > 0
+
+    def _persist_login_cookies(self) -> None:
+        cookies_path = self._cookies_file_path()
+        cookies_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            cookies = self.driver.get_cookies()
+            cookies_path.write_text(json.dumps(cookies, ensure_ascii=True), encoding="utf-8")
+        except Exception:
+            logger.debug("Could not persist Facebook cookies.", exc_info=True)
 
     def get_group_links(self, desired_count: int) -> list[str]:
         search_url = f"https://www.facebook.com/search/groups/?q={quote_plus(self.settings.search_word)}"
