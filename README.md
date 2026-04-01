@@ -10,7 +10,7 @@ For the full startup flow, see:
 
 ## System Flow
 
-![System Flow](docs/system-flow.svg)
+![System Flow](docs/system-flow.png)
 
 ## What This Project Does
 

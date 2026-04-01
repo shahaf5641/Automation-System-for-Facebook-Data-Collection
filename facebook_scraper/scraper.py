@@ -56,12 +56,7 @@ class FacebookScraper:
         logger.info("Manual login completed.")
 
     def _open_facebook_in_new_tab(self) -> None:
-        # Keep Facebook flow inside a browser tab (not a separate popup flow).
-        self.driver.get("about:blank")
-        self.driver.execute_script("window.open(arguments[0], '_blank');", "https://www.facebook.com/")
-        handles = self.driver.window_handles
-        if handles:
-            self.driver.switch_to.window(handles[-1])
+        self.driver.get("https://www.facebook.com/")
 
     def _cookies_file_path(self) -> Path:
         profile_dir = Path(self.settings.chrome_profile_dir)

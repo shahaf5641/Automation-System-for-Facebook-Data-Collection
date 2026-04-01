@@ -6,6 +6,7 @@ import re
 import threading
 import time
 import uuid
+import csv
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -245,6 +246,19 @@ active_job_id: str | None = None
 waiting_job_ids: deque[str] = deque()
 job_store: BaseJobStore = build_job_store()
 run_history_store: BaseRunHistoryStore = build_run_history_store()
+
+
+def _count_saved_csv_rows(output_file: str) -> int:
+    path = Path(str(output_file or "").strip())
+    if not path.exists():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            return sum(1 for _ in reader)
+    except OSError:
+        return 0
 
 
 def _sync_job(job: ScrapeJob) -> None:
@@ -512,6 +526,12 @@ def _run_job(job: ScrapeJob) -> None:
                 if job.progress_percent < 100:
                     job.progress_text = "Failed"
                 job.finished_at = time.time()
+        if exit_code in {1, 2}:
+            saved_rows = _count_saved_csv_rows(job.settings.output_file)
+            if saved_rows > 0:
+                job.append_log(f"Partial CSV saved with {saved_rows} rows.")
+            else:
+                job.append_log("No CSV rows were saved before the process stopped.")
         _sync_job(job)
         global active_job_id
         with jobs_lock:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -76,6 +77,23 @@ def configure_logging(extra_handlers: list[logging.Handler] | None = None) -> No
     logging.getLogger("webdriver_manager").setLevel(logging.ERROR)
 
 
+def _save_partial_csv(records, output_path: Path) -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "Author": record.author_name,
+                "Post Time": record.post_time,
+                "Content": record.post_content,
+                "Post Link": record.post_link,
+            }
+            for record in records
+        ]
+    )
+    df.reset_index(drop=True, inplace=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path, index=False, encoding="utf-8-sig")
+
+
 def run_scraper(settings: Settings, control: DriverControl | None = None) -> int:
     logger = logging.getLogger("facebook_scraper")
     if control and control.stop_requested:
@@ -85,6 +103,9 @@ def run_scraper(settings: Settings, control: DriverControl | None = None) -> int
     driver = None
 
     try:
+        output_path = Path(settings.output_file)
+        partial_save_interval_seconds = 4.0
+        last_partial_save_at = time.monotonic()
         driver = build_driver(headless=settings.headless, profile_dir=settings.chrome_profile_dir)
         if control:
             control.attach_driver(driver)
@@ -114,6 +135,8 @@ def run_scraper(settings: Settings, control: DriverControl | None = None) -> int
         contributing_groups = 0
         for group_idx, group_link in enumerate(group_links, start=1):
             if control and control.stop_requested:
+                if all_records:
+                    _save_partial_csv(all_records, output_path)
                 logger.warning("Run stopped by user.")
                 return 2
             if len(all_records) >= target_total_posts:
@@ -129,6 +152,10 @@ def run_scraper(settings: Settings, control: DriverControl | None = None) -> int
                 remaining_posts = target_total_posts - len(all_records)
                 all_records.extend(records[:remaining_posts])
 
+            if all_records and time.monotonic() - last_partial_save_at >= partial_save_interval_seconds:
+                _save_partial_csv(all_records, output_path)
+                last_partial_save_at = time.monotonic()
+
         if len(all_records) < target_total_posts:
             logger.warning(
                 "Only %s/%s posts were collected. Try a broader search term.",
@@ -142,26 +169,16 @@ def run_scraper(settings: Settings, control: DriverControl | None = None) -> int
                 desired_groups,
             )
 
-        df = pd.DataFrame(
-            [
-                {
-                    "Author": record.author_name,
-                    "Post Time": record.post_time,
-                    "Content": record.post_content,
-                    "Post Link": record.post_link,
-                }
-                for record in all_records
-            ]
-        )
-        df.reset_index(drop=True, inplace=True)
-
-        output_path = Path(settings.output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(output_path, index=False, encoding="utf-8-sig")
-        logger.info("Done. Saved %s records to %s", len(df), output_path.resolve())
+        _save_partial_csv(all_records, output_path)
+        logger.info("Done. Saved %s records to %s", len(all_records), output_path.resolve())
         logger.info("Expected table size based on settings: %s", settings.expected_table_size)
         return 0
     except Exception as exc:
+        if 'all_records' in locals() and all_records:
+            try:
+                _save_partial_csv(all_records, Path(settings.output_file))
+            except Exception:
+                logger.debug("Could not save partial CSV during exception handling.", exc_info=True)
         if control and control.stop_requested:
             logger.warning("Run stopped by user.")
             return 2

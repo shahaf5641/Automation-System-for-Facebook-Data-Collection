@@ -45,23 +45,13 @@ def build_driver(headless: bool = True, profile_dir: str = ".chrome-profile") ->
 def _start_driver_with_profile(profile_path: Path, headless: bool) -> webdriver.Chrome:
     chrome_options = _build_chrome_options(profile_path, headless=headless)
     service = Service(log_output=os.devnull)
-    driver = webdriver.Chrome(options=chrome_options, service=service)
-    try:
-        driver.minimize_window()
-    except Exception:
-        pass
-    return driver
+    return webdriver.Chrome(options=chrome_options, service=service)
 
 
 def _start_remote_driver(headless: bool, remote_url: str) -> webdriver.Remote:
     chrome_options = _build_chrome_options(None, headless=headless)
     chrome_options.set_capability("se:timeZone", os.getenv("TZ", "Asia/Jerusalem"))
-    driver = webdriver.Remote(command_executor=remote_url, options=chrome_options)
-    try:
-        driver.minimize_window()
-    except Exception:
-        pass
-    return driver
+    return webdriver.Remote(command_executor=remote_url, options=chrome_options)
 
 
 def _build_chrome_options(profile_path: Path | None, headless: bool) -> Options:
